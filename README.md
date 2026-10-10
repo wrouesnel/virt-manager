@@ -21,6 +21,8 @@ and published to the Launchpad PPA
 | serialcon: TIOCSWINSZ | Set host PTY window size on VTE resize (future QEMU char-pty support) |
 | serialcon: guest agent resize | Fallback: run `stty` via guest agent for current QEMU |
 | serialcon: manual resize menu | Right-click "Set Terminal Size" sends `stty` command for guests without the agent |
+| vmmenu: action tooltips | Descriptive tooltips on shutdown, force off, reset, reboot, and save menu items |
+| manager: info columns | VM list shows IP addresses, vCPU count, memory size/usage, and disk size/usage (View > Graph) |
 
 ## Upstream README
 
