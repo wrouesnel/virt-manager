@@ -20,6 +20,7 @@ and published to the Launchpad PPA
 |---|---|
 | serialcon: TIOCSWINSZ | Set host PTY window size on VTE resize (future QEMU char-pty support) |
 | serialcon: guest agent resize | Fallback: run `stty` via guest agent for current QEMU |
+| serialcon: manual resize menu | Right-click "Set Terminal Size" sends `stty` command for guests without the agent |
 
 ## Upstream README
 
