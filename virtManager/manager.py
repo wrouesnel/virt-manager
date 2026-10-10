@@ -1267,6 +1267,15 @@ class vmmManager(vmmGObjectUI):
             pass
         return None
 
+    def _fmt_disk_markup(self, target, alloc, cap):
+        size_text = xmlutil.xml_escape(self._fmt_disk_alloc(alloc, cap))
+        if target:
+            name = xmlutil.xml_escape(target)
+            return ("<span size='smaller' weight='bold'>%s</span>"
+                    " <span size='smaller' font_family='monospace'>%s</span>"
+                    % (name, size_text))
+        return "<span size='smaller' font_family='monospace'>%s</span>" % size_text
+
     def disk_size_data_func(self, column_ignore, cell, model, _iter, data):
         obj = model[_iter][ROW_HANDLE]
         if obj is None or not hasattr(obj, "conn"):
@@ -1279,13 +1288,8 @@ class vmmManager(vmmGObjectUI):
             info = self._get_disk_info(obj, disk)
             if not info:
                 continue
-            target, alloc, cap = info
-            label = target or ""
-            if label:
-                label += ": "
-            parts.append(label + self._fmt_disk_alloc(alloc, cap))
-        cell.set_property("text", "\n".join(parts))
-        cell.set_property("foreground", None)
+            parts.append(self._fmt_disk_markup(*info))
+        cell.set_property("markup", "\n".join(parts))
 
     ######################################
     # Connection row aggregate data funcs #
@@ -1339,10 +1343,10 @@ class vmmManager(vmmGObjectUI):
                     total_alloc += info[1]
                     total_cap += info[2]
         if not total_cap:
-            cell.set_property("text", "")
+            cell.set_property("markup", "")
             return
-        cell.set_property("text", self._fmt_disk_alloc(
-            total_alloc, total_cap))
+        cell.set_property("markup", self._fmt_disk_markup(
+            "", total_alloc, total_cap))
 
     ###########################
     # Info column sort funcs  #
