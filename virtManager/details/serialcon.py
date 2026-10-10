@@ -5,8 +5,14 @@
 # See the COPYING file in the top-level directory.
 
 # pylint: disable=wrong-import-order,ungrouped-imports
+import fcntl
+import os
+import struct
+import termios
+
 import gi
 from gi.repository import Gdk
+from gi.repository import GLib
 from gi.repository import Gtk
 
 from virtinst import log
@@ -214,6 +220,9 @@ class vmmSerialConsole(vmmGObject):
         self._init_popup()
 
         self._vteterminal = None
+        self._last_cols = -1
+        self._last_rows = -1
+        self._resize_idle_id = None
         self._init_terminal()
 
         self._box = None
@@ -223,6 +232,10 @@ class vmmSerialConsole(vmmGObject):
         self.vm.connect("state-changed", self._vm_status_changed)
 
     def _cleanup(self):
+        if self._resize_idle_id is not None:
+            GLib.source_remove(self._resize_idle_id)
+            self._resize_idle_id = None
+
         self._datastream.cleanup()
         self._datastream = None
 
@@ -242,6 +255,7 @@ class vmmSerialConsole(vmmGObject):
 
         self._vteterminal.connect("button-press-event", self._show_serial_rcpopup)
         self._vteterminal.connect("commit", self._datastream.send_data, self._vteterminal)
+        self._vteterminal.connect("size-allocate", self._on_terminal_size_allocate)
         self._vteterminal.show()
 
     def _init_popup(self):
@@ -290,6 +304,53 @@ class vmmSerialConsole(vmmGObject):
     # Private methods #
     ###################
 
+    def _set_pty_window_size(self, rows, cols):
+        """
+        Set the terminal window size on the host-side PTY. For virtio-console
+        devices, QEMU propagates this to the guest kernel via
+        VIRTIO_CONSOLE_RESIZE, causing a SIGWINCH in the guest. For plain
+        serial devices, this has no guest-visible effect.
+        """
+        path = self.lastpath
+        if not path or not self.vm:
+            return
+
+        if self.vm.conn.is_remote():
+            log.debug("Skipping PTY resize for remote connection")
+            return
+
+        fd = -1
+        try:
+            fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+            winsize = struct.pack("HHHH", rows, cols, 0, 0)
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
+            log.debug("Set PTY %s window size to %dx%d", path, cols, rows)
+        except OSError:
+            log.debug("Could not set PTY window size on %s", path)
+        finally:
+            if fd >= 0:
+                os.close(fd)
+
+    def _on_terminal_size_allocate(self, terminal, allocation):
+        cols = terminal.get_column_count()
+        rows = terminal.get_row_count()
+
+        if cols == self._last_cols and rows == self._last_rows:
+            return
+
+        self._last_cols = cols
+        self._last_rows = rows
+
+        if self._resize_idle_id is not None:
+            GLib.source_remove(self._resize_idle_id)
+
+        def _do_resize():
+            self._resize_idle_id = None
+            self._set_pty_window_size(rows, cols)
+            return False
+
+        self._resize_idle_id = GLib.idle_add(_do_resize)
+
     def _show_error(self, msg):
         self._error_label.set_markup("<b>%s</b>" % msg)
         self._box.set_current_page(1)
@@ -336,6 +397,14 @@ class vmmSerialConsole(vmmGObject):
             dev = self._lookup_dev()
             self._datastream.open(dev, self._vteterminal)
             self._box.set_current_page(0)
+
+            if self._vteterminal:
+                rows = self._vteterminal.get_row_count()
+                cols = self._vteterminal.get_column_count()
+                self._last_rows = rows
+                self._last_cols = cols
+                self._set_pty_window_size(rows, cols)
+
             return True
         except Exception as e:
             log.exception("Error opening serial console")
