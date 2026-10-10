@@ -355,6 +355,7 @@ class vmmManager(vmmGObjectUI):
         nameCol.set_sizing(Gtk.TreeViewColumnSizing.AUTOSIZE)
         nameCol.set_spacing(6)
         nameCol.set_sort_column_id(COL_NAME)
+        nameCol.set_reorderable(True)
 
         vmlist.append_column(nameCol)
 
@@ -382,6 +383,8 @@ class vmmManager(vmmGObjectUI):
         def make_stats_column(title, colnum):
             col = Gtk.TreeViewColumn(title)
             col.set_min_width(140)
+            col.set_resizable(True)
+            col.set_reorderable(True)
 
             txt = Gtk.CellRendererText()
             txt.set_property("ypad", 4)
@@ -408,6 +411,8 @@ class vmmManager(vmmGObjectUI):
         def make_text_column(title, colnum):
             col = Gtk.TreeViewColumn(title)
             col.set_min_width(80)
+            col.set_resizable(True)
+            col.set_reorderable(True)
 
             conn_txt = Gtk.CellRendererText()
             conn_txt.set_property("ypad", 4)
