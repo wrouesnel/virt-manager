@@ -1176,40 +1176,59 @@ class vmmManager(vmmGObjectUI):
                     lines.append(addr["addr"])
         return lines
 
+    _INACTIVE_COLOR = "#888888"
+
     def ip_addr_data_func(self, column_ignore, cell, model, _iter, data):
         obj = model[_iter][ROW_HANDLE]
         if obj is None or not hasattr(obj, "conn"):
             return
         if not obj.is_active():
             cell.set_property("text", "")
+            cell.set_property("foreground", self._INACTIVE_COLOR)
             return
         lines = self._get_domain_ips(obj)
         cell.set_property("text", "\n".join(lines))
+        cell.set_property("foreground", None)
 
     def vcpus_data_func(self, column_ignore, cell, model, _iter, data):
         obj = model[_iter][ROW_HANDLE]
         if obj is None or not hasattr(obj, "conn"):
             return
+        active = obj.is_active()
         xmlobj = obj.get_xmlobj(refresh_if_nec=False)
         cell.set_property("text", str(xmlobj.vcpus or ""))
+        cell.set_property("foreground",
+                          None if active else self._INACTIVE_COLOR)
 
     def memory_size_data_func(self, column_ignore, cell, model, _iter, data):
         obj = model[_iter][ROW_HANDLE]
         if obj is None or not hasattr(obj, "conn"):
             return
+        active = obj.is_active()
         xmlobj = obj.get_xmlobj(refresh_if_nec=False)
         maxmem_mb = (xmlobj.memory or 0) // 1024
         curmem = obj.stats_memory()
         curmem_mb = curmem // 1024 if curmem else 0
-        if obj.is_active() and curmem_mb > 0:
+        if active and curmem_mb > 0:
             cell.set_property("text", "%d / %d MiB" % (curmem_mb, maxmem_mb))
         else:
             cell.set_property("text", "%d MiB" % maxmem_mb)
+        cell.set_property("foreground",
+                          None if active else self._INACTIVE_COLOR)
+
+    @staticmethod
+    def _fmt_disk_size(alloc, cap):
+        cap_gb = cap / (1024 ** 3)
+        alloc_gb = alloc / (1024 ** 3)
+        if alloc_gb > 0 and alloc_gb < cap_gb * 0.99:
+            return "%.1f/%.1f GiB" % (alloc_gb, cap_gb)
+        return "%.1f GiB" % cap_gb
 
     def disk_size_data_func(self, column_ignore, cell, model, _iter, data):
         obj = model[_iter][ROW_HANDLE]
         if obj is None or not hasattr(obj, "conn"):
             return
+        active = obj.is_active()
         disks = obj.get_disk_devices_norefresh()
         parts = []
         for disk in disks:
@@ -1218,20 +1237,25 @@ class vmmManager(vmmGObjectUI):
             path = disk.get_source_path()
             if not path:
                 continue
+            if active:
+                try:
+                    info = obj._backend.blockInfo(path)
+                    parts.append(self._fmt_disk_size(info[1], info[0]))
+                    continue
+                except Exception:
+                    pass
             try:
                 vol = obj.conn.get_vol_by_path(path)
                 if vol:
                     xmlobj = vol.get_xmlobj()
-                    cap_gb = (xmlobj.capacity or 0) / (1024 ** 3)
-                    alloc_gb = (xmlobj.allocation or 0) / (1024 ** 3)
-                    if alloc_gb > 0 and alloc_gb < cap_gb * 0.99:
-                        parts.append("%.1f/%.1f GiB" % (alloc_gb, cap_gb))
-                    else:
-                        parts.append("%.1f GiB" % cap_gb)
+                    parts.append(self._fmt_disk_size(
+                        xmlobj.allocation or 0, xmlobj.capacity or 0))
                     continue
             except Exception:
                 pass
         cell.set_property("text", "\n".join(parts))
+        cell.set_property("foreground",
+                          None if active else self._INACTIVE_COLOR)
 
     ###########################
     # Info column sort funcs  #
