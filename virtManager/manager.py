@@ -735,6 +735,7 @@ class vmmManager(vmmGObjectUI):
         row = self.get_row(vm)
         if row is None:  # pragma: no cover
             return
+        self._refresh_vm_cache(vm)
         self.model.row_changed(row.path, row.iter)
 
     def vm_changed(self, vm):
@@ -878,11 +879,37 @@ class vmmManager(vmmGObjectUI):
         self.popup_vm_menu(self.model, self.model.get_iter(path), event)
         return False
 
+    def _copy_vm_ips(self, _menuitem):
+        vm = self.current_vm()
+        if not vm:
+            return
+        ips = self._get_vm_cache(vm).get("ip_list", [])
+        if ips:
+            clip = Gtk.Clipboard.get_default(self.topwin.get_display())
+            clip.set_text("\n".join(ips), -1)
+
     def popup_vm_menu(self, model, _iter, event):
         if model.iter_parent(_iter) is not None:
             # Popup the vm menu
             vm = model[_iter][ROW_HANDLE]
             self.vmmenu.update_widget_states(vm)
+
+            if not hasattr(self, "_copy_ip_item"):
+                self._copy_ip_sep = Gtk.SeparatorMenuItem()
+                self.vmmenu.add(self._copy_ip_sep)
+                self._copy_ip_item = Gtk.MenuItem.new_with_mnemonic(
+                    _("Copy _IP Addresses"))
+                self._copy_ip_item.connect("activate", self._copy_vm_ips)
+                self.vmmenu.add(self._copy_ip_item)
+
+            ips = self._get_vm_cache(vm).get("ip_list", [])
+            has_ips = bool(ips) and vm.is_active()
+            self._copy_ip_sep.set_visible(has_ips)
+            self._copy_ip_item.set_visible(has_ips)
+            if has_ips:
+                self._copy_ip_item.show()
+                self._copy_ip_sep.show()
+
             self.vmmenu.popup_at_pointer(event)
         else:
             # Pop up connection menu
@@ -1162,27 +1189,6 @@ class vmmManager(vmmGObjectUI):
     # Info column data funcs #
     #########################
 
-    def _get_domain_ips(self, obj):
-        addrs = {}
-        try:
-            addrs = obj._backend.interfaceAddresses(
-                libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE)
-        except Exception:
-            pass
-        if not addrs:
-            try:
-                arp_flag = getattr(
-                    libvirt, "VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_ARP", 3)
-                addrs = obj._backend.interfaceAddresses(arp_flag)
-            except Exception:
-                pass
-        lines = []
-        for name, info in sorted(addrs.items()):
-            for addr in info.get("addrs", []):
-                if addr["type"] == 0:
-                    lines.append(addr["addr"])
-        return lines
-
     _INACTIVE_COLOR = "#888888"
     _MONO = "font_family='monospace' size='smaller'"
 
@@ -1193,58 +1199,6 @@ class vmmManager(vmmGObjectUI):
                 self._MONO, color, escaped)
         return "<span %s>%s</span>" % (self._MONO, escaped)
 
-    def _iter_child_vms(self, model, parent_iter):
-        n = model.iter_n_children(parent_iter)
-        for i in range(n):
-            child = model.iter_nth_child(parent_iter, i)
-            obj = model[child][ROW_HANDLE]
-            if obj is not None and model[child][ROW_IS_VM]:
-                yield obj
-
-    def ip_addr_data_func(self, column_ignore, cell, model, _iter, data):
-        obj = model[_iter][ROW_HANDLE]
-        if obj is None or not hasattr(obj, "conn"):
-            return
-        if not obj.is_active():
-            cell.set_property("markup", "")
-            return
-        lines = self._get_domain_ips(obj)
-        cell.set_property("markup",
-                          "\n".join(self._mono(ip) for ip in lines))
-
-    def vcpus_data_func(self, column_ignore, cell, model, _iter, data):
-        obj = model[_iter][ROW_HANDLE]
-        if obj is None or not hasattr(obj, "conn"):
-            return
-        active = obj.is_active()
-        xmlobj = obj.get_xmlobj(refresh_if_nec=False)
-        color = None if active else self._INACTIVE_COLOR
-        cell.set_property("markup",
-                          self._mono(xmlobj.vcpus or "", color))
-
-    def memory_size_data_func(self, column_ignore, cell, model, _iter, data):
-        obj = model[_iter][ROW_HANDLE]
-        if obj is None or not hasattr(obj, "conn"):
-            return
-        active = obj.is_active()
-        xmlobj = obj.get_xmlobj(refresh_if_nec=False)
-        maxmem_mb = (xmlobj.memory or 0) // 1024
-        curmem = obj.stats_memory()
-        curmem_mb = curmem // 1024 if curmem else 0
-        if active and curmem_mb > 0:
-            text = "%d / %d MiB" % (curmem_mb, maxmem_mb)
-        else:
-            text = "%d MiB" % maxmem_mb
-        color = None if active else self._INACTIVE_COLOR
-        cell.set_property("markup", self._mono(text, color))
-
-    @staticmethod
-    def _fmt_size(nbytes):
-        gb = nbytes / (1024 ** 3)
-        if gb >= 1.0:
-            return "%.1f GiB" % gb
-        return "%d MiB" % (nbytes // (1024 ** 2))
-
     @staticmethod
     def _fmt_disk_alloc(alloc, cap):
         cap_gb = cap / (1024 ** 3)
@@ -1253,8 +1207,16 @@ class vmmManager(vmmGObjectUI):
             return "%.1f/%.1f GiB" % (alloc_gb, cap_gb)
         return "%.1f GiB" % cap_gb
 
+    def _fmt_disk_markup(self, target, alloc, cap):
+        size_text = xmlutil.xml_escape(self._fmt_disk_alloc(alloc, cap))
+        markup = "<span %s>%s</span>" % (self._MONO, size_text)
+        if target:
+            name = xmlutil.xml_escape(target)
+            markup += (" <span size='smaller' weight='bold'>%s</span>"
+                       % name)
+        return markup
+
     def _get_disk_info(self, obj, disk):
-        """Return (target, alloc, cap) for a disk device, or None."""
         path = disk.get_source_path()
         if not path:
             return None
@@ -1274,29 +1236,117 @@ class vmmManager(vmmGObjectUI):
             pass
         return None
 
-    def _fmt_disk_markup(self, target, alloc, cap):
-        size_text = xmlutil.xml_escape(self._fmt_disk_alloc(alloc, cap))
-        markup = "<span size='smaller' font_family='monospace'>%s</span>" % size_text
-        if target:
-            name = xmlutil.xml_escape(target)
-            markup += (" <span size='smaller' weight='bold'>%s</span>"
-                       % name)
-        return markup
+    def _refresh_vm_cache(self, obj):
+        """Recompute cached markup for a VM's info columns."""
+        cache = getattr(obj, "_vmlist_cache", None)
+        if cache is None:
+            cache = {}
+            obj._vmlist_cache = cache
 
-    def disk_size_data_func(self, column_ignore, cell, model, _iter, data):
-        obj = model[_iter][ROW_HANDLE]
-        if obj is None or not hasattr(obj, "conn"):
-            return
-        disks = obj.get_disk_devices_norefresh()
-        parts = []
-        for disk in disks:
+        active = obj.is_active()
+        color = None if active else self._INACTIVE_COLOR
+
+        # IPs
+        ip_list = []
+        if active:
+            addrs = {}
+            try:
+                addrs = obj._backend.interfaceAddresses(
+                    libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE)
+            except Exception:
+                pass
+            if not addrs:
+                try:
+                    arp_flag = getattr(
+                        libvirt, "VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_ARP", 3)
+                    addrs = obj._backend.interfaceAddresses(arp_flag)
+                except Exception:
+                    pass
+            for _name, info in sorted(addrs.items()):
+                for addr in info.get("addrs", []):
+                    if addr["type"] == 0:
+                        ip_list.append(addr["addr"])
+        cache["ip_list"] = ip_list
+        cache["ip_markup"] = "\n".join(
+            self._mono(ip) for ip in ip_list) if ip_list else ""
+
+        # vCPUs
+        xmlobj = obj.get_xmlobj(refresh_if_nec=False)
+        vcpus = xmlobj.vcpus or 0
+        cache["vcpus"] = vcpus
+        cache["vcpus_markup"] = self._mono(vcpus, color) if vcpus else ""
+
+        # Memory
+        maxmem_mb = (xmlobj.memory or 0) // 1024
+        curmem = obj.stats_memory()
+        curmem_mb = curmem // 1024 if curmem else 0
+        if active and curmem_mb > 0:
+            mem_text = "%d / %d MiB" % (curmem_mb, maxmem_mb)
+        else:
+            mem_text = "%d MiB" % maxmem_mb if maxmem_mb else ""
+        cache["memory"] = xmlobj.memory or 0
+        cache["memory_markup"] = self._mono(mem_text, color) if mem_text else ""
+
+        # Disks
+        total_alloc = 0
+        total_cap = 0
+        disk_parts = []
+        for disk in obj.get_disk_devices_norefresh():
             if disk.device != "disk":
                 continue
             info = self._get_disk_info(obj, disk)
             if not info:
                 continue
-            parts.append(self._fmt_disk_markup(*info))
-        cell.set_property("markup", "\n".join(parts))
+            total_alloc += info[1]
+            total_cap += info[2]
+            disk_parts.append(self._fmt_disk_markup(*info))
+        cache["disk_alloc"] = total_alloc
+        cache["disk_cap"] = total_cap
+        cache["disk_markup"] = "\n".join(disk_parts)
+
+        return cache
+
+    def _get_vm_cache(self, obj):
+        cache = getattr(obj, "_vmlist_cache", None)
+        if cache is None:
+            cache = self._refresh_vm_cache(obj)
+        return cache
+
+    def _iter_child_vms(self, model, parent_iter):
+        n = model.iter_n_children(parent_iter)
+        for i in range(n):
+            child = model.iter_nth_child(parent_iter, i)
+            obj = model[child][ROW_HANDLE]
+            if obj is not None and model[child][ROW_IS_VM]:
+                yield obj
+
+    def ip_addr_data_func(self, column_ignore, cell, model, _iter, data):
+        obj = model[_iter][ROW_HANDLE]
+        if obj is None or not hasattr(obj, "conn"):
+            return
+        cell.set_property("markup", self._get_vm_cache(obj).get(
+            "ip_markup", ""))
+
+    def vcpus_data_func(self, column_ignore, cell, model, _iter, data):
+        obj = model[_iter][ROW_HANDLE]
+        if obj is None or not hasattr(obj, "conn"):
+            return
+        cell.set_property("markup", self._get_vm_cache(obj).get(
+            "vcpus_markup", ""))
+
+    def memory_size_data_func(self, column_ignore, cell, model, _iter, data):
+        obj = model[_iter][ROW_HANDLE]
+        if obj is None or not hasattr(obj, "conn"):
+            return
+        cell.set_property("markup", self._get_vm_cache(obj).get(
+            "memory_markup", ""))
+
+    def disk_size_data_func(self, column_ignore, cell, model, _iter, data):
+        obj = model[_iter][ROW_HANDLE]
+        if obj is None or not hasattr(obj, "conn"):
+            return
+        cell.set_property("markup", self._get_vm_cache(obj).get(
+            "disk_markup", ""))
 
     ######################################
     # Connection row aggregate data funcs #
@@ -1308,8 +1358,7 @@ class vmmManager(vmmGObjectUI):
         total = 0
         for obj in self._iter_child_vms(model, _iter):
             if obj.is_active():
-                xmlobj = obj.get_xmlobj(refresh_if_nec=False)
-                total += xmlobj.vcpus or 0
+                total += self._get_vm_cache(obj).get("vcpus", 0)
         cell.set_property("markup",
                           self._mono(total) if total else "")
 
@@ -1317,24 +1366,15 @@ class vmmManager(vmmGObjectUI):
                                    _iter, data):
         if not model[_iter][ROW_IS_CONN]:
             return
-        total_cur = 0
-        total_max = 0
+        total_mem = 0
         for obj in self._iter_child_vms(model, _iter):
             if obj.is_active():
-                xmlobj = obj.get_xmlobj(refresh_if_nec=False)
-                total_max += xmlobj.memory or 0
-                curmem = obj.stats_memory()
-                total_cur += curmem if curmem else 0
-        if not total_max:
+                total_mem += self._get_vm_cache(obj).get("memory", 0)
+        if not total_mem:
             cell.set_property("markup", "")
             return
-        total_cur_mb = total_cur // 1024
-        total_max_mb = total_max // 1024
-        if total_cur_mb > 0:
-            text = "%d / %d MiB" % (total_cur_mb, total_max_mb)
-        else:
-            text = "%d MiB" % total_max_mb
-        cell.set_property("markup", self._mono(text))
+        total_mem_mb = total_mem // 1024
+        cell.set_property("markup", self._mono("%d MiB" % total_mem_mb))
 
     def conn_disk_size_data_func(self, column_ignore, cell, model,
                                  _iter, data):
@@ -1343,13 +1383,9 @@ class vmmManager(vmmGObjectUI):
         total_alloc = 0
         total_cap = 0
         for obj in self._iter_child_vms(model, _iter):
-            for disk in obj.get_disk_devices_norefresh():
-                if disk.device != "disk":
-                    continue
-                info = self._get_disk_info(obj, disk)
-                if info:
-                    total_alloc += info[1]
-                    total_cap += info[2]
+            cache = self._get_vm_cache(obj)
+            total_alloc += cache.get("disk_alloc", 0)
+            total_cap += cache.get("disk_cap", 0)
         if not total_cap:
             cell.set_property("markup", "")
             return
@@ -1363,51 +1399,36 @@ class vmmManager(vmmGObjectUI):
     def vmlist_ip_addr_sorter(self, model, iter1, iter2, ignore):
         obj1 = model[iter1][ROW_HANDLE]
         obj2 = model[iter2][ROW_HANDLE]
-        def _get_first_ip(obj):
-            if not hasattr(obj, "conn") or not obj.is_active():
+        def _first_ip(obj):
+            if not hasattr(obj, "conn"):
                 return ""
-            ips = self._get_domain_ips(obj)
+            ips = self._get_vm_cache(obj).get("ip_list", [])
             return ips[0] if ips else ""
-        return _cmp(_get_first_ip(obj1), _get_first_ip(obj2))
+        return _cmp(_first_ip(obj1), _first_ip(obj2))
 
     def vmlist_vcpus_sorter(self, model, iter1, iter2, ignore):
         obj1 = model[iter1][ROW_HANDLE]
         obj2 = model[iter2][ROW_HANDLE]
-        def _get_vcpus(obj):
+        def _vcpus(obj):
             if not hasattr(obj, "conn"):
                 return 0
-            xmlobj = obj.get_xmlobj(refresh_if_nec=False)
-            return xmlobj.vcpus or 0
-        return _cmp(_get_vcpus(obj1), _get_vcpus(obj2))
+            return self._get_vm_cache(obj).get("vcpus", 0)
+        return _cmp(_vcpus(obj1), _vcpus(obj2))
 
     def vmlist_memory_size_sorter(self, model, iter1, iter2, ignore):
         obj1 = model[iter1][ROW_HANDLE]
         obj2 = model[iter2][ROW_HANDLE]
-        def _get_mem(obj):
+        def _mem(obj):
             if not hasattr(obj, "conn"):
                 return 0
-            xmlobj = obj.get_xmlobj(refresh_if_nec=False)
-            return xmlobj.memory or 0
-        return _cmp(_get_mem(obj1), _get_mem(obj2))
+            return self._get_vm_cache(obj).get("memory", 0)
+        return _cmp(_mem(obj1), _mem(obj2))
 
     def vmlist_disk_size_sorter(self, model, iter1, iter2, ignore):
         obj1 = model[iter1][ROW_HANDLE]
         obj2 = model[iter2][ROW_HANDLE]
-        def _get_disk_total(obj):
+        def _disk(obj):
             if not hasattr(obj, "conn"):
                 return 0
-            total = 0
-            try:
-                for disk in obj.get_disk_devices_norefresh():
-                    if disk.device != "disk":
-                        continue
-                    path = disk.get_source_path()
-                    if not path:
-                        continue
-                    vol = obj.conn.get_vol_by_path(path)
-                    if vol:
-                        total += vol.get_capacity() or 0
-            except Exception:
-                pass
-            return total
+            return self._get_vm_cache(obj).get("disk_cap", 0)
         return _cmp(_get_disk_total(obj1), _get_disk_total(obj2))
