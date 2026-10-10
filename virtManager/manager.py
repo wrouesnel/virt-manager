@@ -402,15 +402,9 @@ class vmmManager(vmmGObjectUI):
             vmlist.append_column(col)
             return col
 
-        self.guestcpucol = make_stats_column(_("CPU usage"), COL_GUEST_CPU)
-        self.hostcpucol = make_stats_column(_("Host CPU usage"), COL_HOST_CPU)
-        self.memcol = make_stats_column(_("Memory usage"), COL_MEM)
-        self.diskcol = make_stats_column(_("Disk I/O"), COL_DISK)
-        self.netcol = make_stats_column(_("Network I/O"), COL_NETWORK)
-
-        def make_text_column(title, colnum):
+        def make_text_column(title, colnum, min_width=80):
             col = Gtk.TreeViewColumn(title)
-            col.set_min_width(80)
+            col.set_min_width(min_width)
             col.set_resizable(True)
             col.set_reorderable(True)
 
@@ -429,10 +423,16 @@ class vmmManager(vmmGObjectUI):
             vmlist.append_column(col)
             return col
 
-        self.ipaddrcol = make_text_column(_("IP Address"), COL_IP_ADDR)
-        self.vcpuscol = make_text_column(_("vCPUs"), COL_VCPUS)
+        self.ipaddrcol = make_text_column(_("IP Addresses"), COL_IP_ADDR)
+        self.vcpuscol = make_text_column(_("vCPUs"), COL_VCPUS, min_width=50)
         self.memsizecol = make_text_column(_("Memory"), COL_MEM_SIZE)
         self.disksizecol = make_text_column(_("Disks"), COL_DISK_SIZE)
+
+        self.guestcpucol = make_stats_column(_("CPU usage"), COL_GUEST_CPU)
+        self.hostcpucol = make_stats_column(_("Host CPU usage"), COL_HOST_CPU)
+        self.memcol = make_stats_column(_("Memory usage"), COL_MEM)
+        self.diskcol = make_stats_column(_("Disk I/O"), COL_DISK)
+        self.netcol = make_stats_column(_("Network I/O"), COL_NETWORK)
 
         model.set_sort_func(COL_NAME, self.vmlist_name_sorter)
         model.set_sort_func(COL_GUEST_CPU, self.vmlist_guest_cpu_usage_sorter)
@@ -1155,6 +1155,27 @@ class vmmManager(vmmGObjectUI):
     # Info column data funcs #
     #########################
 
+    def _get_domain_ips(self, obj):
+        addrs = {}
+        try:
+            addrs = obj._backend.interfaceAddresses(
+                libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE)
+        except Exception:
+            pass
+        if not addrs:
+            try:
+                arp_flag = getattr(
+                    libvirt, "VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_ARP", 3)
+                addrs = obj._backend.interfaceAddresses(arp_flag)
+            except Exception:
+                pass
+        lines = []
+        for name, info in sorted(addrs.items()):
+            for addr in info.get("addrs", []):
+                if addr["type"] == 0:
+                    lines.append(addr["addr"])
+        return lines
+
     def ip_addr_data_func(self, column_ignore, cell, model, _iter, data):
         obj = model[_iter][ROW_HANDLE]
         if obj is None or not hasattr(obj, "conn"):
@@ -1162,28 +1183,8 @@ class vmmManager(vmmGObjectUI):
         if not obj.is_active():
             cell.set_property("text", "")
             return
-        ips = []
-        try:
-            addrs = obj._backend.interfaceAddresses(
-                libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE)
-            for _name, info in addrs.items():
-                for addr in info.get("addrs", []):
-                    if addr["type"] == 0:
-                        ips.append(addr["addr"])
-        except Exception:
-            pass
-        if not ips:
-            try:
-                arp_flag = getattr(
-                    libvirt, "VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_ARP", 3)
-                addrs = obj._backend.interfaceAddresses(arp_flag)
-                for _name, info in addrs.items():
-                    for addr in info.get("addrs", []):
-                        if addr["type"] == 0:
-                            ips.append(addr["addr"])
-            except Exception:
-                pass
-        cell.set_property("text", ", ".join(ips))
+        lines = self._get_domain_ips(obj)
+        cell.set_property("text", "\n".join(lines))
 
     def vcpus_data_func(self, column_ignore, cell, model, _iter, data):
         obj = model[_iter][ROW_HANDLE]
@@ -1230,7 +1231,7 @@ class vmmManager(vmmGObjectUI):
                     continue
             except Exception:
                 pass
-        cell.set_property("text", ", ".join(parts))
+        cell.set_property("text", "\n".join(parts))
 
     ###########################
     # Info column sort funcs  #
@@ -1242,16 +1243,8 @@ class vmmManager(vmmGObjectUI):
         def _get_first_ip(obj):
             if not hasattr(obj, "conn") or not obj.is_active():
                 return ""
-            try:
-                addrs = obj._backend.interfaceAddresses(
-                    libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE)
-                for _n, info in addrs.items():
-                    for addr in info.get("addrs", []):
-                        if addr["type"] == 0:
-                            return addr["addr"]
-            except Exception:
-                pass
-            return ""
+            ips = self._get_domain_ips(obj)
+            return ips[0] if ips else ""
         return _cmp(_get_first_ip(obj1), _get_first_ip(obj2))
 
     def vmlist_vcpus_sorter(self, model, iter1, iter2, ignore):
