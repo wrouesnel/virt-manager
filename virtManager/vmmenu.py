@@ -25,8 +25,10 @@ class _VMMenu(Gtk.Menu):
 
         self._init_state()
 
-    def _add_action(self, label, widgetname, cb):
+    def _add_action(self, label, widgetname, cb, tooltip=None):
         item = Gtk.MenuItem.new_with_mnemonic(label)
+        if tooltip:
+            item.set_tooltip_text(tooltip)
 
         item.vmm_widget_name = widgetname
         if cb:
@@ -54,12 +56,25 @@ class VMShutdownMenu(_VMMenu):
     """
 
     def _init_state(self):
-        self._add_action(_("_Reboot"), "reboot", VMActionUI.reboot)
-        self._add_action(_("_Shut Down"), "shutdown", VMActionUI.shutdown)
-        self._add_action(_("F_orce Reset"), "reset", VMActionUI.reset)
-        self._add_action(_("_Force Off"), "destroy", VMActionUI.destroy)
+        self._add_action(
+            _("_Reboot"), "reboot", VMActionUI.reboot,
+            _("Ask the guest OS to reboot gracefully via ACPI"))
+        self._add_action(
+            _("_Shut Down"), "shutdown", VMActionUI.shutdown,
+            _("Ask the guest OS to shut down gracefully via ACPI"))
+        self._add_action(
+            _("F_orce Reset"), "reset", VMActionUI.reset,
+            _("Immediately reset the VM, like pressing the physical "
+              "reset button. May cause data loss"))
+        self._add_action(
+            _("_Force Off"), "destroy", VMActionUI.destroy,
+            _("Immediately power off the VM, like pulling the power "
+              "cord. May cause data loss"))
         self.add(Gtk.SeparatorMenuItem())
-        self._add_action(_("Sa_ve"), "save", VMActionUI.save)
+        self._add_action(
+            _("Sa_ve"), "save", VMActionUI.save,
+            _("Save the VM state to disk and stop it. "
+              "The VM can be restored later from where it left off"))
 
         self.get_accessible().set_name("vmm-shutdown-menu")
         self.show_all()
@@ -85,9 +100,12 @@ class VMActionMenu(_VMMenu):
     """
 
     def _init_state(self):
-        self._add_action(_("_Run"), "run", VMActionUI.run)
-        self._add_action(_("_Pause"), "suspend", VMActionUI.suspend)
-        self._add_action(_("R_esume"), "resume", VMActionUI.resume)
+        self._add_action(_("_Run"), "run", VMActionUI.run,
+            _("Start the virtual machine"))
+        self._add_action(_("_Pause"), "suspend", VMActionUI.suspend,
+            _("Pause the VM, freezing its state in memory"))
+        self._add_action(_("R_esume"), "resume", VMActionUI.resume,
+            _("Resume the paused VM"))
         s = self._add_action(_("_Shut Down"), "shutdown", None)
         s.set_submenu(VMShutdownMenu(self._parent, self._current_vm_cb))
 

@@ -366,7 +366,7 @@
                   <object class="GtkMenuToolButton" id="control-shutdown">
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
-                    <property name="tooltip-text" translatable="yes">Shut down the virtual machine</property>
+                    <property name="tooltip-text" translatable="yes">Ask the guest OS to shut down gracefully via ACPI. Use the drop-down arrow for Force Off, Force Reset, and other options.</property>
                     <property name="label" translatable="yes">_Shut Down</property>
                     <property name="use-underline">True</property>
                     <signal name="clicked" handler="on_control_shutdown_clicked" swapped="no"/>
