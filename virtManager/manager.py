@@ -985,12 +985,16 @@ class vmmManager(vmmGObjectUI):
         self.widget(menu).set_active(do_show)
         self._update_spacer_visibility()
 
-    def _toggle_text_helper(self, do_show, col, datafunc, menu):
+    def _toggle_text_helper(self, do_show, col, datafunc, menu,
+                             conn_datafunc=None):
         cells = col.get_cells()
+        conn_txt = cells[0]
         vm_txt = cells[-1]
         datafunc = do_show and datafunc or None
+        conn_datafunc = do_show and conn_datafunc or None
 
         col.set_cell_data_func(vm_txt, datafunc, None)
+        col.set_cell_data_func(conn_txt, conn_datafunc, None)
         col.set_visible(do_show)
         self.widget(menu).set_active(do_show)
         self._update_spacer_visibility()
@@ -1049,6 +1053,7 @@ class vmmManager(vmmGObjectUI):
             self.vcpuscol,
             self.vcpus_data_func,
             "menu_view_stats_vcpus",
+            conn_datafunc=self.conn_vcpus_data_func,
         )
 
     def toggle_memory_size_visible_widget(self):
@@ -1057,6 +1062,7 @@ class vmmManager(vmmGObjectUI):
             self.memsizecol,
             self.memory_size_data_func,
             "menu_view_stats_memory_size",
+            conn_datafunc=self.conn_memory_size_data_func,
         )
 
     def toggle_disk_size_visible_widget(self):
@@ -1065,6 +1071,7 @@ class vmmManager(vmmGObjectUI):
             self.disksizecol,
             self.disk_size_data_func,
             "menu_view_stats_disk_size",
+            conn_datafunc=self.conn_disk_size_data_func,
         )
 
     def toggle_stats_visible(self, src, stats_id):
@@ -1178,6 +1185,14 @@ class vmmManager(vmmGObjectUI):
 
     _INACTIVE_COLOR = "#888888"
 
+    def _iter_child_vms(self, model, parent_iter):
+        n = model.iter_n_children(parent_iter)
+        for i in range(n):
+            child = model.iter_nth_child(parent_iter, i)
+            obj = model[child][ROW_HANDLE]
+            if obj is not None and model[child][ROW_IS_VM]:
+                yield obj
+
     def ip_addr_data_func(self, column_ignore, cell, model, _iter, data):
         obj = model[_iter][ROW_HANDLE]
         if obj is None or not hasattr(obj, "conn"):
@@ -1217,45 +1232,117 @@ class vmmManager(vmmGObjectUI):
                           None if active else self._INACTIVE_COLOR)
 
     @staticmethod
-    def _fmt_disk_size(alloc, cap):
+    def _fmt_size(nbytes):
+        gb = nbytes / (1024 ** 3)
+        if gb >= 1.0:
+            return "%.1f GiB" % gb
+        return "%d MiB" % (nbytes // (1024 ** 2))
+
+    @staticmethod
+    def _fmt_disk_alloc(alloc, cap):
         cap_gb = cap / (1024 ** 3)
         alloc_gb = alloc / (1024 ** 3)
         if alloc_gb > 0 and alloc_gb < cap_gb * 0.99:
             return "%.1f/%.1f GiB" % (alloc_gb, cap_gb)
         return "%.1f GiB" % cap_gb
 
+    def _get_disk_info(self, obj, disk):
+        """Return (target, alloc, cap) for a disk device, or None."""
+        path = disk.get_source_path()
+        if not path:
+            return None
+        target = disk.target or ""
+        if obj.is_active():
+            try:
+                info = obj._backend.blockInfo(path)
+                return (target, info[1], info[0])
+            except Exception:
+                pass
+        try:
+            vol = obj.conn.get_vol_by_path(path)
+            if vol:
+                xmlobj = vol.get_xmlobj()
+                return (target, xmlobj.allocation or 0, xmlobj.capacity or 0)
+        except Exception:
+            pass
+        return None
+
     def disk_size_data_func(self, column_ignore, cell, model, _iter, data):
         obj = model[_iter][ROW_HANDLE]
         if obj is None or not hasattr(obj, "conn"):
             return
-        active = obj.is_active()
         disks = obj.get_disk_devices_norefresh()
         parts = []
         for disk in disks:
             if disk.device != "disk":
                 continue
-            path = disk.get_source_path()
-            if not path:
+            info = self._get_disk_info(obj, disk)
+            if not info:
                 continue
-            if active:
-                try:
-                    info = obj._backend.blockInfo(path)
-                    parts.append(self._fmt_disk_size(info[1], info[0]))
-                    continue
-                except Exception:
-                    pass
-            try:
-                vol = obj.conn.get_vol_by_path(path)
-                if vol:
-                    xmlobj = vol.get_xmlobj()
-                    parts.append(self._fmt_disk_size(
-                        xmlobj.allocation or 0, xmlobj.capacity or 0))
-                    continue
-            except Exception:
-                pass
+            target, alloc, cap = info
+            label = target or ""
+            if label:
+                label += ": "
+            parts.append(label + self._fmt_disk_alloc(alloc, cap))
         cell.set_property("text", "\n".join(parts))
-        cell.set_property("foreground",
-                          None if active else self._INACTIVE_COLOR)
+        cell.set_property("foreground", None)
+
+    ######################################
+    # Connection row aggregate data funcs #
+    ######################################
+
+    def conn_vcpus_data_func(self, column_ignore, cell, model, _iter, data):
+        if not model[_iter][ROW_IS_CONN]:
+            return
+        total = 0
+        for obj in self._iter_child_vms(model, _iter):
+            if obj.is_active():
+                xmlobj = obj.get_xmlobj(refresh_if_nec=False)
+                total += xmlobj.vcpus or 0
+        cell.set_property("text", str(total) if total else "")
+
+    def conn_memory_size_data_func(self, column_ignore, cell, model,
+                                   _iter, data):
+        if not model[_iter][ROW_IS_CONN]:
+            return
+        total_cur = 0
+        total_max = 0
+        for obj in self._iter_child_vms(model, _iter):
+            if obj.is_active():
+                xmlobj = obj.get_xmlobj(refresh_if_nec=False)
+                total_max += xmlobj.memory or 0
+                curmem = obj.stats_memory()
+                total_cur += curmem if curmem else 0
+        if not total_max:
+            cell.set_property("text", "")
+            return
+        total_cur_mb = total_cur // 1024
+        total_max_mb = total_max // 1024
+        if total_cur_mb > 0:
+            cell.set_property("text",
+                              "%d / %d MiB" % (total_cur_mb, total_max_mb))
+        else:
+            cell.set_property("text", "%d MiB" % total_max_mb)
+
+    def conn_disk_size_data_func(self, column_ignore, cell, model,
+                                 _iter, data):
+        if not model[_iter][ROW_IS_CONN]:
+            return
+        total_alloc = 0
+        total_cap = 0
+        for obj in self._iter_child_vms(model, _iter):
+            for disk in obj.get_disk_devices_norefresh():
+                if disk.device != "disk":
+                    continue
+                info = self._get_disk_info(obj, disk)
+                if info:
+                    total_alloc += info[1]
+                    total_cap += info[2]
+        if not total_cap:
+            cell.set_property("text", "")
+            return
+        cell.set_property("text", self._fmt_disk_alloc(
+            total_alloc, total_cap))
 
     ###########################
     # Info column sort funcs  #
