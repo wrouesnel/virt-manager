@@ -1184,6 +1184,14 @@ class vmmManager(vmmGObjectUI):
         return lines
 
     _INACTIVE_COLOR = "#888888"
+    _MONO = "font_family='monospace' size='smaller'"
+
+    def _mono(self, text, color=None):
+        escaped = xmlutil.xml_escape(str(text))
+        if color:
+            return "<span %s foreground='%s'>%s</span>" % (
+                self._MONO, color, escaped)
+        return "<span %s>%s</span>" % (self._MONO, escaped)
 
     def _iter_child_vms(self, model, parent_iter):
         n = model.iter_n_children(parent_iter)
@@ -1198,12 +1206,11 @@ class vmmManager(vmmGObjectUI):
         if obj is None or not hasattr(obj, "conn"):
             return
         if not obj.is_active():
-            cell.set_property("text", "")
-            cell.set_property("foreground", self._INACTIVE_COLOR)
+            cell.set_property("markup", "")
             return
         lines = self._get_domain_ips(obj)
-        cell.set_property("text", "\n".join(lines))
-        cell.set_property("foreground", None)
+        cell.set_property("markup",
+                          "\n".join(self._mono(ip) for ip in lines))
 
     def vcpus_data_func(self, column_ignore, cell, model, _iter, data):
         obj = model[_iter][ROW_HANDLE]
@@ -1211,9 +1218,9 @@ class vmmManager(vmmGObjectUI):
             return
         active = obj.is_active()
         xmlobj = obj.get_xmlobj(refresh_if_nec=False)
-        cell.set_property("text", str(xmlobj.vcpus or ""))
-        cell.set_property("foreground",
-                          None if active else self._INACTIVE_COLOR)
+        color = None if active else self._INACTIVE_COLOR
+        cell.set_property("markup",
+                          self._mono(xmlobj.vcpus or "", color))
 
     def memory_size_data_func(self, column_ignore, cell, model, _iter, data):
         obj = model[_iter][ROW_HANDLE]
@@ -1225,11 +1232,11 @@ class vmmManager(vmmGObjectUI):
         curmem = obj.stats_memory()
         curmem_mb = curmem // 1024 if curmem else 0
         if active and curmem_mb > 0:
-            cell.set_property("text", "%d / %d MiB" % (curmem_mb, maxmem_mb))
+            text = "%d / %d MiB" % (curmem_mb, maxmem_mb)
         else:
-            cell.set_property("text", "%d MiB" % maxmem_mb)
-        cell.set_property("foreground",
-                          None if active else self._INACTIVE_COLOR)
+            text = "%d MiB" % maxmem_mb
+        color = None if active else self._INACTIVE_COLOR
+        cell.set_property("markup", self._mono(text, color))
 
     @staticmethod
     def _fmt_size(nbytes):
@@ -1303,7 +1310,8 @@ class vmmManager(vmmGObjectUI):
             if obj.is_active():
                 xmlobj = obj.get_xmlobj(refresh_if_nec=False)
                 total += xmlobj.vcpus or 0
-        cell.set_property("text", str(total) if total else "")
+        cell.set_property("markup",
+                          self._mono(total) if total else "")
 
     def conn_memory_size_data_func(self, column_ignore, cell, model,
                                    _iter, data):
@@ -1318,15 +1326,15 @@ class vmmManager(vmmGObjectUI):
                 curmem = obj.stats_memory()
                 total_cur += curmem if curmem else 0
         if not total_max:
-            cell.set_property("text", "")
+            cell.set_property("markup", "")
             return
         total_cur_mb = total_cur // 1024
         total_max_mb = total_max // 1024
         if total_cur_mb > 0:
-            cell.set_property("text",
-                              "%d / %d MiB" % (total_cur_mb, total_max_mb))
+            text = "%d / %d MiB" % (total_cur_mb, total_max_mb)
         else:
-            cell.set_property("text", "%d MiB" % total_max_mb)
+            text = "%d MiB" % total_max_mb
+        cell.set_property("markup", self._mono(text))
 
     def conn_disk_size_data_func(self, column_ignore, cell, model,
                                  _iter, data):
