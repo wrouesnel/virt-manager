@@ -1269,12 +1269,12 @@ class vmmManager(vmmGObjectUI):
 
     def _fmt_disk_markup(self, target, alloc, cap):
         size_text = xmlutil.xml_escape(self._fmt_disk_alloc(alloc, cap))
+        markup = "<span size='smaller' font_family='monospace'>%s</span>" % size_text
         if target:
             name = xmlutil.xml_escape(target)
-            return ("<span size='smaller' weight='bold'>%s</span>"
-                    " <span size='smaller' font_family='monospace'>%s</span>"
-                    % (name, size_text))
-        return "<span size='smaller' font_family='monospace'>%s</span>" % size_text
+            markup += (" <span size='smaller' weight='bold'>%s</span>"
+                       % name)
+        return markup
 
     def disk_size_data_func(self, column_ignore, cell, model, _iter, data):
         obj = model[_iter][ROW_HANDLE]
