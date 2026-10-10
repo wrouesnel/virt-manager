@@ -276,6 +276,13 @@ class vmmSerialConsole(vmmGObject):
         self._serial_paste.connect("activate", self._serial_paste_text)
         self._serial_popup.add(self._serial_paste)
 
+        self._serial_popup.add(Gtk.SeparatorMenuItem())
+
+        self._serial_resize = Gtk.MenuItem.new_with_mnemonic(
+            _("_Set Terminal Size"))
+        self._serial_resize.connect("activate", self._serial_send_resize)
+        self._serial_popup.add(self._serial_resize)
+
     def _init_ui(self):
         self._box = Gtk.Notebook()
         self._box.set_show_tabs(False)
@@ -489,6 +496,13 @@ class vmmSerialConsole(vmmGObject):
             self._serial_copy.set_sensitive(True)
         else:
             self._serial_copy.set_sensitive(False)
+
+        cols = self._vteterminal.get_column_count()
+        rows = self._vteterminal.get_row_count()
+        self._serial_resize.set_label(
+            _("_Set Terminal Size (%d × %d)") % (cols, rows))
+        self._serial_resize.set_use_underline(True)
+
         self._serial_popup.popup_at_pointer(event)
 
     def _serial_copy_text(self, src_ignore):
@@ -496,3 +510,9 @@ class vmmSerialConsole(vmmGObject):
 
     def _serial_paste_text(self, src_ignore):
         self._vteterminal.paste_clipboard()
+
+    def _serial_send_resize(self, src_ignore):
+        cols = self._vteterminal.get_column_count()
+        rows = self._vteterminal.get_row_count()
+        cmd = "\x15stty rows %d cols %d\r" % (rows, cols)
+        self._datastream.send_data(None, cmd, len(cmd), self._vteterminal)
