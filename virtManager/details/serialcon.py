@@ -6,6 +6,7 @@
 
 # pylint: disable=wrong-import-order,ungrouped-imports
 import fcntl
+import json
 import os
 import struct
 import termios
@@ -16,6 +17,11 @@ from gi.repository import GLib
 from gi.repository import Gtk
 
 from virtinst import log
+
+try:
+    import libvirt_qemu
+except ImportError:
+    libvirt_qemu = None
 
 # We can use either 2.91 or 2.90. This is just to silence runtime warnings
 try:
@@ -304,6 +310,15 @@ class vmmSerialConsole(vmmGObject):
     # Private methods #
     ###################
 
+    def _guest_tty_name(self):
+        dev = self._lookup_dev()
+        if not dev:
+            return None
+
+        if dev.DEVICE_TYPE == "console" and dev.target_type == "virtio":
+            return "/dev/hvc%d" % (dev.target_port or 0)
+        return "/dev/ttyS%d" % (dev.target_port or 0)
+
     def _set_pty_window_size(self, rows, cols):
         """
         Set the terminal window size on the host-side PTY. For virtio-console
@@ -316,7 +331,6 @@ class vmmSerialConsole(vmmGObject):
             return
 
         if self.vm.conn.is_remote():
-            log.debug("Skipping PTY resize for remote connection")
             return
 
         fd = -1
@@ -330,6 +344,43 @@ class vmmSerialConsole(vmmGObject):
         finally:
             if fd >= 0:
                 os.close(fd)
+
+    def _set_guest_terminal_size(self, rows, cols):
+        """
+        Set the terminal size inside the guest via the QEMU guest agent.
+        Runs 'stty' on the guest TTY device to update the kernel's window
+        size, which triggers SIGWINCH for the foreground process group.
+        """
+        if not libvirt_qemu:
+            return
+        if not self.vm or not self.vm.agent_ready():
+            return
+
+        tty = self._guest_tty_name()
+        if not tty:
+            return
+
+        cmd = json.dumps({
+            "execute": "guest-exec",
+            "arguments": {
+                "path": "/bin/stty",
+                "arg": ["-F", tty, "rows", str(rows), "cols", str(cols)],
+                "capture-output": False,
+            },
+        })
+
+        try:
+            backend = self.vm.get_backend()
+            libvirt_qemu.qemuAgentCommand(
+                backend, cmd,
+                libvirt_qemu.VIR_DOMAIN_QEMU_AGENT_COMMAND_NOWAIT, 0)
+            log.debug("Guest agent: set %s to %dx%d", tty, cols, rows)
+        except Exception:
+            log.debug("Guest agent resize failed for %s", tty)
+
+    def _propagate_resize(self, rows, cols):
+        self._set_pty_window_size(rows, cols)
+        self._set_guest_terminal_size(rows, cols)
 
     def _on_terminal_size_allocate(self, terminal, allocation):
         cols = terminal.get_column_count()
@@ -346,7 +397,7 @@ class vmmSerialConsole(vmmGObject):
 
         def _do_resize():
             self._resize_idle_id = None
-            self._set_pty_window_size(rows, cols)
+            self._propagate_resize(rows, cols)
             return False
 
         self._resize_idle_id = GLib.idle_add(_do_resize)
@@ -403,7 +454,7 @@ class vmmSerialConsole(vmmGObject):
                 cols = self._vteterminal.get_column_count()
                 self._last_rows = rows
                 self._last_cols = cols
-                self._set_pty_window_size(rows, cols)
+                self._propagate_resize(rows, cols)
 
             return True
         except Exception as e:
