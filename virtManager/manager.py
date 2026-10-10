@@ -4,6 +4,8 @@
 # This work is licensed under the GNU GPLv2 or later.
 # See the COPYING file in the top-level directory.
 
+import libvirt
+
 from gi.repository import GObject
 from gi.repository import Gtk
 from gi.repository import Gdk
@@ -38,7 +40,8 @@ GRAPH_LEN = 40
 ) = range(11)
 
 # Columns in the tree view
-(COL_NAME, COL_GUEST_CPU, COL_HOST_CPU, COL_MEM, COL_DISK, COL_NETWORK) = range(6)
+(COL_NAME, COL_GUEST_CPU, COL_HOST_CPU, COL_MEM, COL_DISK, COL_NETWORK,
+ COL_IP_ADDR, COL_VCPUS, COL_MEM_SIZE, COL_DISK_SIZE) = range(10)
 
 
 def _style_get_prop(widget, propname):
@@ -104,6 +107,10 @@ class vmmManager(vmmGObjectUI):
                 "on_menu_view_memory_usage_activate": self.toggle_stats_visible_memory_usage,
                 "on_menu_view_disk_io_activate": self.toggle_stats_visible_disk,
                 "on_menu_view_network_traffic_activate": self.toggle_stats_visible_network,
+                "on_menu_view_ip_addresses_activate": self.toggle_stats_visible_ip_addresses,
+                "on_menu_view_vcpus_activate": self.toggle_stats_visible_vcpus,
+                "on_menu_view_memory_size_activate": self.toggle_stats_visible_memory_size,
+                "on_menu_view_disk_size_activate": self.toggle_stats_visible_disk_size,
                 "on_vm_manager_delete_event": self.close,
                 "on_vmm_manager_configure_event": self.window_resized,
                 "on_menu_file_add_connection_activate": self.open_newconn,
@@ -134,6 +141,10 @@ class vmmManager(vmmGObjectUI):
         self.memcol = None
         self.guestcpucol = None
         self.hostcpucol = None
+        self.ipaddrcol = None
+        self.vcpuscol = None
+        self.memsizecol = None
+        self.disksizecol = None
         self.spacer_txt = None
         self.init_vmlist()
 
@@ -194,6 +205,10 @@ class vmmManager(vmmGObjectUI):
         self.memcol = None
         self.hostcpucol = None
         self.netcol = None
+        self.ipaddrcol = None
+        self.vcpuscol = None
+        self.memsizecol = None
+        self.disksizecol = None
 
         self.shutdownmenu.destroy()
         self.shutdownmenu = None
@@ -258,11 +273,28 @@ class vmmManager(vmmGObjectUI):
             self.config.on_stats_enable_memory_poll_changed(self._config_polling_change_cb, COL_MEM)
         )
 
+        self.add_gsettings_handle(
+            self.config.on_vmlist_ip_addresses_visible_changed(
+                self.toggle_ip_addresses_visible_widget))
+        self.add_gsettings_handle(
+            self.config.on_vmlist_vcpus_visible_changed(
+                self.toggle_vcpus_visible_widget))
+        self.add_gsettings_handle(
+            self.config.on_vmlist_memory_size_visible_changed(
+                self.toggle_memory_size_visible_widget))
+        self.add_gsettings_handle(
+            self.config.on_vmlist_disk_size_visible_changed(
+                self.toggle_disk_size_visible_widget))
+
         self.toggle_guest_cpu_usage_visible_widget()
         self.toggle_host_cpu_usage_visible_widget()
         self.toggle_memory_usage_visible_widget()
         self.toggle_disk_io_visible_widget()
         self.toggle_network_traffic_visible_widget()
+        self.toggle_ip_addresses_visible_widget()
+        self.toggle_vcpus_visible_widget()
+        self.toggle_memory_size_visible_widget()
+        self.toggle_disk_size_visible_widget()
 
     def init_toolbar(self):
         self.widget("vm-new").set_icon_name("vm_new")
@@ -373,12 +405,40 @@ class vmmManager(vmmGObjectUI):
         self.diskcol = make_stats_column(_("Disk I/O"), COL_DISK)
         self.netcol = make_stats_column(_("Network I/O"), COL_NETWORK)
 
+        def make_text_column(title, colnum):
+            col = Gtk.TreeViewColumn(title)
+            col.set_min_width(80)
+
+            conn_txt = Gtk.CellRendererText()
+            conn_txt.set_property("ypad", 4)
+            col.pack_start(conn_txt, True)
+            col.add_attribute(conn_txt, "visible", ROW_IS_CONN)
+
+            vm_txt = Gtk.CellRendererText()
+            vm_txt.set_property("ypad", 4)
+            vm_txt.set_property("xpad", 6)
+            col.pack_start(vm_txt, True)
+            col.add_attribute(vm_txt, "visible", ROW_IS_VM)
+
+            col.set_sort_column_id(colnum)
+            vmlist.append_column(col)
+            return col
+
+        self.ipaddrcol = make_text_column(_("IP Address"), COL_IP_ADDR)
+        self.vcpuscol = make_text_column(_("vCPUs"), COL_VCPUS)
+        self.memsizecol = make_text_column(_("Memory"), COL_MEM_SIZE)
+        self.disksizecol = make_text_column(_("Disks"), COL_DISK_SIZE)
+
         model.set_sort_func(COL_NAME, self.vmlist_name_sorter)
         model.set_sort_func(COL_GUEST_CPU, self.vmlist_guest_cpu_usage_sorter)
         model.set_sort_func(COL_HOST_CPU, self.vmlist_host_cpu_usage_sorter)
         model.set_sort_func(COL_MEM, self.vmlist_memory_usage_sorter)
         model.set_sort_func(COL_DISK, self.vmlist_disk_io_sorter)
         model.set_sort_func(COL_NETWORK, self.vmlist_network_usage_sorter)
+        model.set_sort_func(COL_IP_ADDR, self.vmlist_ip_addr_sorter)
+        model.set_sort_func(COL_VCPUS, self.vmlist_vcpus_sorter)
+        model.set_sort_func(COL_MEM_SIZE, self.vmlist_memory_size_sorter)
+        model.set_sort_func(COL_DISK_SIZE, self.vmlist_disk_size_sorter)
         model.set_sort_column_id(COL_NAME, Gtk.SortType.ASCENDING)
 
     ##################
@@ -898,6 +958,16 @@ class vmmManager(vmmGObjectUI):
                 tool_text = _("Disabled in preferences dialog.")
             widget.set_tooltip_text(tool_text)
 
+    def _update_spacer_visibility(self):
+        all_cols = [
+            self.netcol, self.diskcol, self.memcol,
+            self.guestcpucol, self.hostcpucol,
+            self.ipaddrcol, self.vcpuscol,
+            self.memsizecol, self.disksizecol,
+        ]
+        any_visible = any(c.get_visible() for c in all_cols)
+        self.spacer_txt.set_property("visible", not any_visible)
+
     def _toggle_graph_helper(self, do_show, col, datafunc, menu):
         img = -1
         for child in col.get_cells():
@@ -908,14 +978,17 @@ class vmmManager(vmmGObjectUI):
         col.set_cell_data_func(img, datafunc, None)
         col.set_visible(do_show)
         self.widget(menu).set_active(do_show)
+        self._update_spacer_visibility()
 
-        any_visible = any(
-            [
-                c.get_visible()
-                for c in [self.netcol, self.diskcol, self.memcol, self.guestcpucol, self.hostcpucol]
-            ]
-        )
-        self.spacer_txt.set_property("visible", not any_visible)
+    def _toggle_text_helper(self, do_show, col, datafunc, menu):
+        cells = col.get_cells()
+        vm_txt = cells[-1]
+        datafunc = do_show and datafunc or None
+
+        col.set_cell_data_func(vm_txt, datafunc, None)
+        col.set_visible(do_show)
+        self.widget(menu).set_active(do_show)
+        self._update_spacer_visibility()
 
     def toggle_network_traffic_visible_widget(self):
         self._toggle_graph_helper(
@@ -957,6 +1030,38 @@ class vmmManager(vmmGObjectUI):
             "menu_view_stats_host_cpu",
         )
 
+    def toggle_ip_addresses_visible_widget(self):
+        self._toggle_text_helper(
+            self.config.is_vmlist_ip_addresses_visible(),
+            self.ipaddrcol,
+            self.ip_addr_data_func,
+            "menu_view_stats_ip_addresses",
+        )
+
+    def toggle_vcpus_visible_widget(self):
+        self._toggle_text_helper(
+            self.config.is_vmlist_vcpus_visible(),
+            self.vcpuscol,
+            self.vcpus_data_func,
+            "menu_view_stats_vcpus",
+        )
+
+    def toggle_memory_size_visible_widget(self):
+        self._toggle_text_helper(
+            self.config.is_vmlist_memory_size_visible(),
+            self.memsizecol,
+            self.memory_size_data_func,
+            "menu_view_stats_memory_size",
+        )
+
+    def toggle_disk_size_visible_widget(self):
+        self._toggle_text_helper(
+            self.config.is_vmlist_disk_size_visible(),
+            self.disksizecol,
+            self.disk_size_data_func,
+            "menu_view_stats_disk_size",
+        )
+
     def toggle_stats_visible(self, src, stats_id):
         visible = src.get_active()
         set_stats = {
@@ -965,6 +1070,10 @@ class vmmManager(vmmGObjectUI):
             COL_MEM: self.config.set_vmlist_memory_usage_visible,
             COL_DISK: self.config.set_vmlist_disk_io_visible,
             COL_NETWORK: self.config.set_vmlist_network_traffic_visible,
+            COL_IP_ADDR: self.config.set_vmlist_ip_addresses_visible,
+            COL_VCPUS: self.config.set_vmlist_vcpus_visible,
+            COL_MEM_SIZE: self.config.set_vmlist_memory_size_visible,
+            COL_DISK_SIZE: self.config.set_vmlist_disk_size_visible,
         }
         set_stats[stats_id](visible)
 
@@ -982,6 +1091,18 @@ class vmmManager(vmmGObjectUI):
 
     def toggle_stats_visible_network(self, src):
         self.toggle_stats_visible(src, COL_NETWORK)
+
+    def toggle_stats_visible_ip_addresses(self, src):
+        self.toggle_stats_visible(src, COL_IP_ADDR)
+
+    def toggle_stats_visible_vcpus(self, src):
+        self.toggle_stats_visible(src, COL_VCPUS)
+
+    def toggle_stats_visible_memory_size(self, src):
+        self.toggle_stats_visible(src, COL_MEM_SIZE)
+
+    def toggle_stats_visible_disk_size(self, src):
+        self.toggle_stats_visible(src, COL_DISK_SIZE)
 
     def guest_cpu_usage_img(self, column_ignore, cell, model, _iter, data):
         obj = model[_iter][ROW_HANDLE]
@@ -1024,3 +1145,142 @@ class vmmManager(vmmGObjectUI):
         d1, d2 = obj.network_traffic_vectors(GRAPH_LEN, self.max_net_rate)
         data = [(x + y) / 2 for x, y in zip(d1, d2)]
         cell.set_property("data_array", data)
+
+    #########################
+    # Info column data funcs #
+    #########################
+
+    def ip_addr_data_func(self, column_ignore, cell, model, _iter, data):
+        obj = model[_iter][ROW_HANDLE]
+        if obj is None or not hasattr(obj, "conn"):
+            return
+        if not obj.is_active():
+            cell.set_property("text", "")
+            return
+        ips = []
+        try:
+            addrs = obj._backend.interfaceAddresses(
+                libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE)
+            for _name, info in addrs.items():
+                for addr in info.get("addrs", []):
+                    if addr["type"] == 0:
+                        ips.append(addr["addr"])
+        except Exception:
+            pass
+        if not ips:
+            try:
+                arp_flag = getattr(
+                    libvirt, "VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_ARP", 3)
+                addrs = obj._backend.interfaceAddresses(arp_flag)
+                for _name, info in addrs.items():
+                    for addr in info.get("addrs", []):
+                        if addr["type"] == 0:
+                            ips.append(addr["addr"])
+            except Exception:
+                pass
+        cell.set_property("text", ", ".join(ips))
+
+    def vcpus_data_func(self, column_ignore, cell, model, _iter, data):
+        obj = model[_iter][ROW_HANDLE]
+        if obj is None or not hasattr(obj, "conn"):
+            return
+        xmlobj = obj.get_xmlobj(refresh_if_nec=False)
+        cell.set_property("text", str(xmlobj.vcpus or ""))
+
+    def memory_size_data_func(self, column_ignore, cell, model, _iter, data):
+        obj = model[_iter][ROW_HANDLE]
+        if obj is None or not hasattr(obj, "conn"):
+            return
+        xmlobj = obj.get_xmlobj(refresh_if_nec=False)
+        maxmem_mb = (xmlobj.memory or 0) // 1024
+        curmem = obj.stats_memory()
+        curmem_mb = curmem // 1024 if curmem else 0
+        if obj.is_active() and curmem_mb > 0:
+            cell.set_property("text", "%d / %d MiB" % (curmem_mb, maxmem_mb))
+        else:
+            cell.set_property("text", "%d MiB" % maxmem_mb)
+
+    def disk_size_data_func(self, column_ignore, cell, model, _iter, data):
+        obj = model[_iter][ROW_HANDLE]
+        if obj is None or not hasattr(obj, "conn"):
+            return
+        disks = obj.get_disk_devices_norefresh()
+        parts = []
+        for disk in disks:
+            if disk.device != "disk":
+                continue
+            try:
+                vol = obj.conn.get_vol_by_path(disk.path)
+                if vol:
+                    xmlobj = vol.get_xmlobj()
+                    cap_gb = (xmlobj.capacity or 0) / (1024 ** 3)
+                    alloc_gb = (xmlobj.allocation or 0) / (1024 ** 3)
+                    if alloc_gb > 0 and alloc_gb < cap_gb * 0.99:
+                        parts.append("%.1f/%.1f GiB" % (alloc_gb, cap_gb))
+                    else:
+                        parts.append("%.1f GiB" % cap_gb)
+                    continue
+            except Exception:
+                pass
+        cell.set_property("text", ", ".join(parts))
+
+    ###########################
+    # Info column sort funcs  #
+    ###########################
+
+    def vmlist_ip_addr_sorter(self, model, iter1, iter2, ignore):
+        obj1 = model[iter1][ROW_HANDLE]
+        obj2 = model[iter2][ROW_HANDLE]
+        def _get_first_ip(obj):
+            if not hasattr(obj, "conn") or not obj.is_active():
+                return ""
+            try:
+                addrs = obj._backend.interfaceAddresses(
+                    libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE)
+                for _n, info in addrs.items():
+                    for addr in info.get("addrs", []):
+                        if addr["type"] == 0:
+                            return addr["addr"]
+            except Exception:
+                pass
+            return ""
+        return _cmp(_get_first_ip(obj1), _get_first_ip(obj2))
+
+    def vmlist_vcpus_sorter(self, model, iter1, iter2, ignore):
+        obj1 = model[iter1][ROW_HANDLE]
+        obj2 = model[iter2][ROW_HANDLE]
+        def _get_vcpus(obj):
+            if not hasattr(obj, "conn"):
+                return 0
+            xmlobj = obj.get_xmlobj(refresh_if_nec=False)
+            return xmlobj.vcpus or 0
+        return _cmp(_get_vcpus(obj1), _get_vcpus(obj2))
+
+    def vmlist_memory_size_sorter(self, model, iter1, iter2, ignore):
+        obj1 = model[iter1][ROW_HANDLE]
+        obj2 = model[iter2][ROW_HANDLE]
+        def _get_mem(obj):
+            if not hasattr(obj, "conn"):
+                return 0
+            xmlobj = obj.get_xmlobj(refresh_if_nec=False)
+            return xmlobj.memory or 0
+        return _cmp(_get_mem(obj1), _get_mem(obj2))
+
+    def vmlist_disk_size_sorter(self, model, iter1, iter2, ignore):
+        obj1 = model[iter1][ROW_HANDLE]
+        obj2 = model[iter2][ROW_HANDLE]
+        def _get_disk_total(obj):
+            if not hasattr(obj, "conn"):
+                return 0
+            total = 0
+            try:
+                for disk in obj.get_disk_devices_norefresh():
+                    if disk.device != "disk":
+                        continue
+                    vol = obj.conn.get_vol_by_path(disk.path)
+                    if vol:
+                        total += vol.get_capacity() or 0
+            except Exception:
+                pass
+            return total
+        return _cmp(_get_disk_total(obj1), _get_disk_total(obj2))

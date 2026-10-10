@@ -324,6 +324,42 @@ class vmmConfig:
     def on_vmlist_network_traffic_visible_changed(self, cb):
         return self.conf.notify_add("/vmlist-fields/network-traffic", cb)
 
+    def is_vmlist_ip_addresses_visible(self):
+        return self.conf.get("/vmlist-fields/ip-addresses")
+
+    def is_vmlist_vcpus_visible(self):
+        return self.conf.get("/vmlist-fields/vcpus")
+
+    def is_vmlist_memory_size_visible(self):
+        return self.conf.get("/vmlist-fields/memory-size")
+
+    def is_vmlist_disk_size_visible(self):
+        return self.conf.get("/vmlist-fields/disk-size")
+
+    def set_vmlist_ip_addresses_visible(self, state):
+        self.conf.set("/vmlist-fields/ip-addresses", state)
+
+    def set_vmlist_vcpus_visible(self, state):
+        self.conf.set("/vmlist-fields/vcpus", state)
+
+    def set_vmlist_memory_size_visible(self, state):
+        self.conf.set("/vmlist-fields/memory-size", state)
+
+    def set_vmlist_disk_size_visible(self, state):
+        self.conf.set("/vmlist-fields/disk-size", state)
+
+    def on_vmlist_ip_addresses_visible_changed(self, cb):
+        return self.conf.notify_add("/vmlist-fields/ip-addresses", cb)
+
+    def on_vmlist_vcpus_visible_changed(self, cb):
+        return self.conf.notify_add("/vmlist-fields/vcpus", cb)
+
+    def on_vmlist_memory_size_visible_changed(self, cb):
+        return self.conf.notify_add("/vmlist-fields/memory-size", cb)
+
+    def on_vmlist_disk_size_visible_changed(self, cb):
+        return self.conf.notify_add("/vmlist-fields/disk-size", cb)
+
     # Keys preferences
     def get_keys_combination(self):
         ret = self.conf.get("/console/grab-keys")

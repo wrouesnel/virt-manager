@@ -198,6 +198,48 @@
                                 <signal name="activate" handler="on_menu_view_network_traffic_activate" swapped="no"/>
                               </object>
                             </child>
+                            <child>
+                              <object class="GtkSeparatorMenuItem">
+                                <property name="visible">True</property>
+                                <property name="can-focus">False</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkCheckMenuItem" id="menu_view_stats_ip_addresses">
+                                <property name="visible">True</property>
+                                <property name="can-focus">False</property>
+                                <property name="label" translatable="yes">_IP Addresses</property>
+                                <property name="use-underline">True</property>
+                                <signal name="activate" handler="on_menu_view_ip_addresses_activate" swapped="no"/>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkCheckMenuItem" id="menu_view_stats_vcpus">
+                                <property name="visible">True</property>
+                                <property name="can-focus">False</property>
+                                <property name="label" translatable="yes">v_CPUs</property>
+                                <property name="use-underline">True</property>
+                                <signal name="activate" handler="on_menu_view_vcpus_activate" swapped="no"/>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkCheckMenuItem" id="menu_view_stats_memory_size">
+                                <property name="visible">True</property>
+                                <property name="can-focus">False</property>
+                                <property name="label" translatable="yes">Memory Si_ze</property>
+                                <property name="use-underline">True</property>
+                                <signal name="activate" handler="on_menu_view_memory_size_activate" swapped="no"/>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkCheckMenuItem" id="menu_view_stats_disk_size">
+                                <property name="visible">True</property>
+                                <property name="can-focus">False</property>
+                                <property name="label" translatable="yes">Dis_k Size</property>
+                                <property name="use-underline">True</property>
+                                <signal name="activate" handler="on_menu_view_disk_size_activate" swapped="no"/>
+                              </object>
+                            </child>
                           </object>
                         </child>
                       </object>
@@ -325,7 +367,7 @@
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
                     <property name="has-tooltip">True</property>
-                    <property name="tooltip-text" translatable="yes">Shut down the virtual machine</property>
+                    <property name="tooltip-text" translatable="yes">Ask the guest OS to shut down gracefully via ACPI. Use the drop-down arrow for Force Off, Force Reset, and other options.</property>
                     <property name="label" translatable="yes">_Shut Down</property>
                     <property name="use-underline">True</property>
                     <signal name="clicked" handler="on_vm_shutdown_clicked" swapped="no"/>

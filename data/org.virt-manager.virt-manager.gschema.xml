@@ -141,6 +141,30 @@
       <description>Show memory usage field in the domain list summary view</description>
     </key>
 
+    <key name="ip-addresses" type="b">
+      <default>false</default>
+      <summary>Show IP addresses in summary</summary>
+      <description>Show the IP addresses field in the domain list summary view</description>
+    </key>
+
+    <key name="vcpus" type="b">
+      <default>false</default>
+      <summary>Show vCPU count in summary</summary>
+      <description>Show the vCPU count field in the domain list summary view</description>
+    </key>
+
+    <key name="memory-size" type="b">
+      <default>false</default>
+      <summary>Show memory size in summary</summary>
+      <description>Show the memory size field in the domain list summary view</description>
+    </key>
+
+    <key name="disk-size" type="b">
+      <default>false</default>
+      <summary>Show disk sizes in summary</summary>
+      <description>Show the disk sizes field in the domain list summary view</description>
+    </key>
+
   </schema>
 
   <schema id="org.virt-manager.virt-manager.stats" path="/org/virt-manager/virt-manager/stats/">
