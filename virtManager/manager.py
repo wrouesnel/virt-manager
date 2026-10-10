@@ -1209,8 +1209,11 @@ class vmmManager(vmmGObjectUI):
         for disk in disks:
             if disk.device != "disk":
                 continue
+            path = disk.get_source_path()
+            if not path:
+                continue
             try:
-                vol = obj.conn.get_vol_by_path(disk.path)
+                vol = obj.conn.get_vol_by_path(path)
                 if vol:
                     xmlobj = vol.get_xmlobj()
                     cap_gb = (xmlobj.capacity or 0) / (1024 ** 3)
@@ -1277,7 +1280,10 @@ class vmmManager(vmmGObjectUI):
                 for disk in obj.get_disk_devices_norefresh():
                     if disk.device != "disk":
                         continue
-                    vol = obj.conn.get_vol_by_path(disk.path)
+                    path = disk.get_source_path()
+                    if not path:
+                        continue
+                    vol = obj.conn.get_vol_by_path(path)
                     if vol:
                         total += vol.get_capacity() or 0
             except Exception:
