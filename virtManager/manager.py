@@ -37,7 +37,9 @@ GRAPH_LEN = 40
     ROW_IS_VM_RUNNING,
     ROW_COLOR,
     ROW_INSPECTION_OS_ICON,
-) = range(11)
+    ROW_IS_GROUP,
+    ROW_GROUP_KEY,
+) = range(13)
 
 # Columns in the tree view
 (COL_NAME, COL_GUEST_CPU, COL_HOST_CPU, COL_MEM, COL_DISK, COL_NETWORK,
@@ -111,6 +113,8 @@ class vmmManager(vmmGObjectUI):
                 "on_menu_view_vcpus_activate": self.toggle_stats_visible_vcpus,
                 "on_menu_view_memory_size_activate": self.toggle_stats_visible_memory_size,
                 "on_menu_view_disk_size_activate": self.toggle_stats_visible_disk_size,
+                "on_menu_view_group_by_state_activate": self.toggle_group_by_state,
+                "on_menu_view_group_by_network_activate": self.toggle_group_by_network,
                 "on_vm_manager_delete_event": self.close,
                 "on_vmm_manager_configure_event": self.window_resized,
                 "on_menu_file_add_connection_activate": self.open_newconn,
@@ -286,6 +290,13 @@ class vmmManager(vmmGObjectUI):
             self.config.on_vmlist_disk_size_visible_changed(
                 self.toggle_disk_size_visible_widget))
 
+        self.add_gsettings_handle(
+            self.config.on_vmlist_group_by_state_changed(
+                self._group_by_changed_cb))
+        self.add_gsettings_handle(
+            self.config.on_vmlist_group_by_network_changed(
+                self._group_by_changed_cb))
+
         self.toggle_guest_cpu_usage_visible_widget()
         self.toggle_host_cpu_usage_visible_widget()
         self.toggle_memory_usage_visible_widget()
@@ -295,6 +306,11 @@ class vmmManager(vmmGObjectUI):
         self.toggle_vcpus_visible_widget()
         self.toggle_memory_size_visible_widget()
         self.toggle_disk_size_visible_widget()
+
+        self.widget("menu_view_group_by_state").set_active(
+            self.config.get_vmlist_group_by_state())
+        self.widget("menu_view_group_by_network").set_active(
+            self.config.get_vmlist_group_by_network())
 
     def init_toolbar(self):
         self.widget("vm-new").set_icon_name("vm_new")
@@ -343,6 +359,8 @@ class vmmManager(vmmGObjectUI):
         rowtypes.insert(ROW_IS_VM_RUNNING, bool)  # if VM is running
         rowtypes.insert(ROW_COLOR, str)  # row markup color string
         rowtypes.insert(ROW_INSPECTION_OS_ICON, GdkPixbuf.Pixbuf)  # OS icon
+        rowtypes.insert(ROW_IS_GROUP, bool)  # if row is a group header
+        rowtypes.insert(ROW_GROUP_KEY, str)  # group key for sorting
 
         model = Gtk.TreeStore(*rowtypes)
         vmlist.set_model(model)
@@ -459,7 +477,7 @@ class vmmManager(vmmGObjectUI):
 
     def current_vm(self):
         row = self.current_row()
-        if not row or row[ROW_IS_CONN]:
+        if not row or row[ROW_IS_CONN] or row[ROW_IS_GROUP]:
             return None
 
         return row[ROW_HANDLE]
@@ -467,6 +485,13 @@ class vmmManager(vmmGObjectUI):
     def current_conn(self):
         row = self.current_row()
         if not row:
+            return None
+        if row[ROW_IS_GROUP]:
+            parent_iter = self.model.iter_parent(row.iter)
+            while parent_iter and self.model[parent_iter][ROW_IS_GROUP]:
+                parent_iter = self.model.iter_parent(parent_iter)
+            if parent_iter and self.model[parent_iter][ROW_IS_CONN]:
+                return self.model[parent_iter][ROW_HANDLE]
             return None
         handle = row[ROW_HANDLE]
         if row[ROW_IS_CONN]:
@@ -609,25 +634,102 @@ class vmmManager(vmmGObjectUI):
     # VM add/remove management methods #
     ####################################
 
+    def _group_by_state(self):
+        return self.config.get_vmlist_group_by_state()
+
+    def _group_by_network(self):
+        return self.config.get_vmlist_group_by_network()
+
+    def _build_group_row(self, label, group_key):
+        row = []
+        row.insert(ROW_HANDLE, None)
+        row.insert(ROW_SORT_KEY, group_key)
+        markup = "<span weight='bold'>%s</span>" % xmlutil.xml_escape(label)
+        row.insert(ROW_MARKUP, markup)
+        row.insert(ROW_STATUS_ICON, None)
+        row.insert(ROW_HINT, "")
+        row.insert(ROW_IS_CONN, False)
+        row.insert(ROW_IS_CONN_CONNECTED, False)
+        row.insert(ROW_IS_VM, False)
+        row.insert(ROW_IS_VM_RUNNING, False)
+        row.insert(ROW_COLOR, None)
+        row.insert(ROW_INSPECTION_OS_ICON, None)
+        row.insert(ROW_IS_GROUP, True)
+        row.insert(ROW_GROUP_KEY, group_key)
+        return row
+
+    def _vm_state_key(self, vm):
+        return "0-running" if vm.is_active() else "1-inactive"
+
+    def _vm_state_label(self, vm):
+        return _("Running") if vm.is_active() else _("Inactive")
+
+    def _vm_network_keys(self, vm):
+        nets = set()
+        try:
+            for iface in vm.get_xmlobj(refresh_if_nec=False).devices.interface:
+                src = iface.source
+                if src:
+                    nets.add(src)
+        except Exception:
+            pass
+        return sorted(nets) if nets else ["(no network)"]
+
+    def _find_or_create_group(self, parent_iter, group_key, label):
+        n = self.model.iter_n_children(parent_iter)
+        for i in range(n):
+            child = self.model.iter_nth_child(parent_iter, i)
+            if (self.model[child][ROW_IS_GROUP] and
+                    self.model[child][ROW_GROUP_KEY] == group_key):
+                return child
+        row = self._build_group_row(label, group_key)
+        new_iter = self.model.append(parent_iter, row)
+        return new_iter
+
+    def _get_vm_parent(self, conn_iter, vm):
+        parent = conn_iter
+        if self._group_by_state():
+            state_key = self._vm_state_key(vm)
+            state_label = self._vm_state_label(vm)
+            parent = self._find_or_create_group(parent, state_key, state_label)
+        if self._group_by_network():
+            nets = self._vm_network_keys(vm)
+            net_label = nets[0]
+            parent = self._find_or_create_group(parent, net_label, net_label)
+        return parent
+
+    def _cleanup_empty_groups(self, parent_iter):
+        i = 0
+        while i < self.model.iter_n_children(parent_iter):
+            child = self.model.iter_nth_child(parent_iter, i)
+            if self.model[child][ROW_IS_GROUP]:
+                self._cleanup_empty_groups(child)
+                if self.model.iter_n_children(child) == 0:
+                    self.model.remove(child)
+                    continue
+            i += 1
+
     def vm_added(self, conn, vm):
         vm_row = self._build_row(None, vm)
         conn_row = self.get_row(conn)
-        self.model.append(conn_row.iter, vm_row)
+        parent = self._get_vm_parent(conn_row.iter, vm)
+        self.model.append(parent, vm_row)
 
         vm.connect("state-changed", self.vm_changed)
         vm.connect("resources-sampled", self.vm_row_updated)
         vm.connect("inspection-changed", self.vm_inspection_changed)
 
-        # Expand a connection when adding a vm to it
         self.widget("vm-list").expand_row(conn_row.path, False)
+        parent_path = self.model.get_path(parent)
+        self.widget("vm-list").expand_row(parent_path, False)
 
     def vm_removed(self, conn, vm):
-        parent = self.get_row(conn).iter
-        for rowidx in range(self.model.iter_n_children(parent)):
-            rowiter = self.model.iter_nth_child(parent, rowidx)
-            if self.model[rowiter][ROW_HANDLE] == vm:
-                self.model.remove(rowiter)
-                break
+        row = self.get_row(vm)
+        if row:
+            self.model.remove(row.iter)
+        conn_row = self.get_row(conn)
+        if conn_row:
+            self._cleanup_empty_groups(conn_row.iter)
 
     def _build_conn_hint(self, conn):
         hint = conn.get_uri()
@@ -687,6 +789,8 @@ class vmmManager(vmmGObjectUI):
         row.insert(ROW_IS_VM_RUNNING, bool(vm) and vm.is_active())
         row.insert(ROW_COLOR, color)
         row.insert(ROW_INSPECTION_OS_ICON, os_icon)
+        row.insert(ROW_IS_GROUP, False)
+        row.insert(ROW_GROUP_KEY, "")
 
         return row
 
@@ -738,6 +842,29 @@ class vmmManager(vmmGObjectUI):
         self._refresh_vm_cache(vm)
         self.model.row_changed(row.path, row.iter)
 
+    def _maybe_regroup_vm(self, vm):
+        if not self._group_by_state() and not self._group_by_network():
+            return
+        row = self.get_row(vm)
+        if row is None:
+            return
+        parent_iter = self.model.iter_parent(row.iter)
+        if parent_iter is None:
+            return
+        conn_iter = parent_iter
+        while self.model[conn_iter][ROW_IS_GROUP]:
+            conn_iter = self.model.iter_parent(conn_iter)
+            if conn_iter is None:
+                return
+        correct_parent = self._get_vm_parent(conn_iter, vm)
+        if self.model.get_path(parent_iter) != self.model.get_path(correct_parent):
+            vm_data = list(self.model[row.iter])
+            self.model.remove(row.iter)
+            self._cleanup_empty_groups(conn_iter)
+            self.model.append(correct_parent, vm_data)
+            path = self.model.get_path(correct_parent)
+            self.widget("vm-list").expand_row(path, False)
+
     def vm_changed(self, vm):
         row = self.get_row(vm)
         if row is None:
@@ -762,6 +889,7 @@ class vmmManager(vmmGObjectUI):
                 return
             raise
 
+        self._maybe_regroup_vm(vm)
         self.vm_row_updated(vm)
 
     def vm_inspection_changed(self, vm):
@@ -889,7 +1017,9 @@ class vmmManager(vmmGObjectUI):
             clip.set_text("\n".join(ips), -1)
 
     def popup_vm_menu(self, model, _iter, event):
-        if model.iter_parent(_iter) is not None:
+        if model[_iter][ROW_IS_GROUP]:
+            return False
+        if model.iter_parent(_iter) is not None and model[_iter][ROW_IS_VM]:
             # Popup the vm menu
             vm = model[_iter][ROW_HANDLE]
             self.vmmenu.update_widget_states(vm)
@@ -933,34 +1063,50 @@ class vmmManager(vmmGObjectUI):
         key2 = str(model[iter2][ROW_SORT_KEY]).lower()
         return _cmp(key1, key2)
 
-    def vmlist_guest_cpu_usage_sorter(self, model, iter1, iter2, ignore):
+    def _sorter_fallback(self, model, iter1, iter2):
+        if model[iter1][ROW_IS_GROUP] or model[iter2][ROW_IS_GROUP]:
+            return _cmp(
+                str(model[iter1][ROW_SORT_KEY]).lower(),
+                str(model[iter2][ROW_SORT_KEY]).lower())
         obj1 = model[iter1][ROW_HANDLE]
         obj2 = model[iter2][ROW_HANDLE]
+        if obj1 is None or obj2 is None:
+            return 0
+        return None, obj1, obj2
 
+    def vmlist_guest_cpu_usage_sorter(self, model, iter1, iter2, ignore):
+        ret = self._sorter_fallback(model, iter1, iter2)
+        if isinstance(ret, int):
+            return ret
+        _, obj1, obj2 = ret
         return _cmp(obj1.guest_cpu_time_percentage(), obj2.guest_cpu_time_percentage())
 
     def vmlist_host_cpu_usage_sorter(self, model, iter1, iter2, ignore):
-        obj1 = model[iter1][ROW_HANDLE]
-        obj2 = model[iter2][ROW_HANDLE]
-
+        ret = self._sorter_fallback(model, iter1, iter2)
+        if isinstance(ret, int):
+            return ret
+        _, obj1, obj2 = ret
         return _cmp(obj1.host_cpu_time_percentage(), obj2.host_cpu_time_percentage())
 
     def vmlist_memory_usage_sorter(self, model, iter1, iter2, ignore):
-        obj1 = model[iter1][ROW_HANDLE]
-        obj2 = model[iter2][ROW_HANDLE]
-
+        ret = self._sorter_fallback(model, iter1, iter2)
+        if isinstance(ret, int):
+            return ret
+        _, obj1, obj2 = ret
         return _cmp(obj1.stats_memory(), obj2.stats_memory())
 
     def vmlist_disk_io_sorter(self, model, iter1, iter2, ignore):
-        obj1 = model[iter1][ROW_HANDLE]
-        obj2 = model[iter2][ROW_HANDLE]
-
+        ret = self._sorter_fallback(model, iter1, iter2)
+        if isinstance(ret, int):
+            return ret
+        _, obj1, obj2 = ret
         return _cmp(obj1.disk_io_rate(), obj2.disk_io_rate())
 
     def vmlist_network_usage_sorter(self, model, iter1, iter2, ignore):
-        obj1 = model[iter1][ROW_HANDLE]
-        obj2 = model[iter2][ROW_HANDLE]
-
+        ret = self._sorter_fallback(model, iter1, iter2)
+        if isinstance(ret, int):
+            return ret
+        _, obj1, obj2 = ret
         return _cmp(obj1.network_traffic_rate(), obj2.network_traffic_rate())
 
     def _config_polling_change_cb(self, column):
@@ -1143,6 +1289,46 @@ class vmmManager(vmmGObjectUI):
     def toggle_stats_visible_disk_size(self, src):
         self.toggle_stats_visible(src, COL_DISK_SIZE)
 
+    def toggle_group_by_state(self, src):
+        self.config.set_vmlist_group_by_state(src.get_active())
+
+    def toggle_group_by_network(self, src):
+        self.config.set_vmlist_group_by_network(src.get_active())
+
+    def _group_by_changed_cb(self, *_args):
+        self.widget("menu_view_group_by_state").set_active(
+            self.config.get_vmlist_group_by_state())
+        self.widget("menu_view_group_by_network").set_active(
+            self.config.get_vmlist_group_by_network())
+        self._rebuild_groups()
+
+    def _rebuild_groups(self):
+        vmlist = self.widget("vm-list")
+        for row in self.model:
+            if not row[ROW_IS_CONN]:
+                continue
+            conn = row[ROW_HANDLE]
+            conn_iter = row.iter
+
+            vms = list(self._iter_child_vms(self.model, conn_iter))
+
+            vm_data = []
+            for vm in vms:
+                vm_row = self.get_row(vm)
+                if vm_row:
+                    vm_data.append((vm, list(self.model[vm_row.iter])))
+
+            child = self.model.iter_children(conn_iter)
+            while child is not None:
+                self.model.remove(child)
+                child = self.model.iter_children(conn_iter)
+
+            for vm, data in vm_data:
+                parent = self._get_vm_parent(conn_iter, vm)
+                self.model.append(parent, data)
+
+            vmlist.expand_row(row.path, True)
+
     def guest_cpu_usage_img(self, column_ignore, cell, model, _iter, data):
         obj = model[_iter][ROW_HANDLE]
         if obj is None or not hasattr(obj, "conn"):
@@ -1316,9 +1502,12 @@ class vmmManager(vmmGObjectUI):
         n = model.iter_n_children(parent_iter)
         for i in range(n):
             child = model.iter_nth_child(parent_iter, i)
-            obj = model[child][ROW_HANDLE]
-            if obj is not None and model[child][ROW_IS_VM]:
-                yield obj
+            if model[child][ROW_IS_GROUP]:
+                yield from self._iter_child_vms(model, child)
+            elif model[child][ROW_IS_VM]:
+                obj = model[child][ROW_HANDLE]
+                if obj is not None:
+                    yield obj
 
     def ip_addr_data_func(self, column_ignore, cell, model, _iter, data):
         obj = model[_iter][ROW_HANDLE]

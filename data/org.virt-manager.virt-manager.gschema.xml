@@ -165,6 +165,18 @@
       <description>Show the disk sizes field in the domain list summary view</description>
     </key>
 
+    <key name="group-by-state" type="b">
+      <default>true</default>
+      <summary>Group VMs by state</summary>
+      <description>Group virtual machines into Running and Inactive categories</description>
+    </key>
+
+    <key name="group-by-network" type="b">
+      <default>false</default>
+      <summary>Group VMs by network</summary>
+      <description>Group virtual machines by their network membership</description>
+    </key>
+
   </schema>
 
   <schema id="org.virt-manager.virt-manager.stats" path="/org/virt-manager/virt-manager/stats/">

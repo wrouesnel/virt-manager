@@ -360,6 +360,24 @@ class vmmConfig:
     def on_vmlist_disk_size_visible_changed(self, cb):
         return self.conf.notify_add("/vmlist-fields/disk-size", cb)
 
+    def get_vmlist_group_by_state(self):
+        return self.conf.get("/vmlist-fields/group-by-state")
+
+    def set_vmlist_group_by_state(self, state):
+        self.conf.set("/vmlist-fields/group-by-state", state)
+
+    def on_vmlist_group_by_state_changed(self, cb):
+        return self.conf.notify_add("/vmlist-fields/group-by-state", cb)
+
+    def get_vmlist_group_by_network(self):
+        return self.conf.get("/vmlist-fields/group-by-network")
+
+    def set_vmlist_group_by_network(self, state):
+        self.conf.set("/vmlist-fields/group-by-network", state)
+
+    def on_vmlist_group_by_network_changed(self, cb):
+        return self.conf.notify_add("/vmlist-fields/group-by-network", cb)
+
     # Keys preferences
     def get_keys_combination(self):
         ret = self.conf.get("/console/grab-keys")
