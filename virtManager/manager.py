@@ -1483,12 +1483,14 @@ class vmmManager(vmmGObjectUI):
         maxmem_mb = (xmlobj.memory or 0) // 1024
         curmem = obj.stats_memory()
         curmem_mb = curmem // 1024 if curmem else 0
-        if active and curmem_mb > 0:
-            mem_text = "%d / %d MiB" % (curmem_mb, maxmem_mb)
-        else:
-            mem_text = "%d MiB" % maxmem_mb if maxmem_mb else ""
+        mem_markup = ""
+        if maxmem_mb:
+            mem_markup = self._mono("%d MiB" % maxmem_mb, color)
+            if active and curmem_mb > 0:
+                mem_markup += "\n" + self._mono(
+                    "%d MiB used" % curmem_mb, color)
         cache["memory"] = xmlobj.memory or 0
-        cache["memory_markup"] = self._mono(mem_text, color) if mem_text else ""
+        cache["memory_markup"] = mem_markup
 
         # Disks
         total_alloc = 0
