@@ -115,6 +115,8 @@ class vmmManager(vmmGObjectUI):
                 "on_menu_view_disk_size_activate": self.toggle_stats_visible_disk_size,
                 "on_menu_view_group_by_state_activate": self.toggle_group_by_state,
                 "on_menu_view_group_by_network_activate": self.toggle_group_by_network,
+                "on_menu_view_expand_all_activate": self.expand_all,
+                "on_menu_view_collapse_all_activate": self.collapse_all,
                 "on_vm_manager_delete_event": self.close,
                 "on_vmm_manager_configure_event": self.window_resized,
                 "on_menu_file_add_connection_activate": self.open_newconn,
@@ -174,6 +176,7 @@ class vmmManager(vmmGObjectUI):
         connmanager.connect("conn-removed", self._conn_removed)
         for conn in connmanager.conns.values():
             self._conn_added(connmanager, conn)
+        self.widget("vm-list").expand_all()
 
     ##################
     # Common methods #
@@ -366,7 +369,11 @@ class vmmManager(vmmGObjectUI):
         vmlist.set_model(model)
         vmlist.set_tooltip_column(ROW_HINT)
         vmlist.set_headers_visible(True)
-        vmlist.set_level_indentation(-(_style_get_prop(vmlist, "expander-size") + 3))
+        self._expander_size = _style_get_prop(vmlist, "expander-size") + 3
+        if self._group_by_state() or self._group_by_network():
+            vmlist.set_level_indentation(0)
+        else:
+            vmlist.set_level_indentation(-self._expander_size)
 
         nameCol = Gtk.TreeViewColumn(_("Name"))
         nameCol.set_expand(True)
@@ -1295,6 +1302,12 @@ class vmmManager(vmmGObjectUI):
     def toggle_group_by_network(self, src):
         self.config.set_vmlist_group_by_network(src.get_active())
 
+    def expand_all(self, _src=None):
+        self.widget("vm-list").expand_all()
+
+    def collapse_all(self, _src=None):
+        self.widget("vm-list").collapse_all()
+
     def _group_by_changed_cb(self, *_args):
         self.widget("menu_view_group_by_state").set_active(
             self.config.get_vmlist_group_by_state())
@@ -1304,6 +1317,10 @@ class vmmManager(vmmGObjectUI):
 
     def _rebuild_groups(self):
         vmlist = self.widget("vm-list")
+        if self._group_by_state() or self._group_by_network():
+            vmlist.set_level_indentation(0)
+        else:
+            vmlist.set_level_indentation(-self._expander_size)
         for row in self.model:
             if not row[ROW_IS_CONN]:
                 continue
